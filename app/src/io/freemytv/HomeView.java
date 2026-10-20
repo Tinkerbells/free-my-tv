@@ -92,12 +92,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final float L_TALL_W = 320, L_CARD_GAP = 40, L_BUTTON = 68, L_BUTTON_GAP = 20, L_BUTTON_CY = 103;
     private static final float L_PLATTER_TOP = 814, L_TILE_H = 126;
     private static final int L_INK = 0xFF1D1D1F, L_DIM = 0xFF6E6E73, L_FAINT = 0xFF8E8E93;
-    private static final String[] TABS = {"Explorar", "Filmes", "Séries", "Lampa"};
-    private static final String[] TABS_EN = {"Explore", "Movies", "Shows", "Lampa"};
-    private static final String[] TABS_ES = {"Explorar", "Películas", "Series", "Lampa"};
-    private static final String[] TAB_KIND = {null, "movie", "tv", null};
-    /** The tabs (the last, Lampa, only when there are lists to show), then the three corner buttons. */
-    private static final int TAB_COUNT = 4, LAMPA_TAB = 3, TOP_ITEMS = TAB_COUNT + 3;
+    private static final String[] TABS = {"Explorar", "Filmes", "Séries"};
+    private static final String[] TABS_EN = {"Explore", "Movies", "Shows"};
+    private static final String[] TABS_ES = {"Explorar", "Películas", "Series"};
+    private static final String[] TAB_KIND = {null, "movie", "tv"};
     private static final int Z_TOP = 4, Z_CARDS = 5;
 
     private final Activity activity;
@@ -133,17 +131,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     // At the top: tabs (0 to 2) and icon-only buttons (3 to 5); the three cards
     private int tab, topIndex, cardIndex;
     private List<Recs.Pick> cards = new ArrayList<>();
-    private final Spring[] topFocus = new Spring[TOP_ITEMS];
-    private final RectF[] topRects = new RectF[TOP_ITEMS];
+    private final Spring[] topFocus = new Spring[6];
+    private final RectF[] topRects = new RectF[6];
     private final Spring[] cardFocus = new Spring[3];
     private final RectF[] cardRects = new RectF[3];
     private final List<HomeApps.Item> lightButtons = new ArrayList<>();
-    // Lampa tab: the user's Lampa lists as cards, three at a time (←/→ past the last card turns the page).
-    private boolean lampaTab;                   // showing: Lampa is installed and has lists
-    private volatile boolean lampaInstalled;    // looked up in the background by reload()
-    private List<Recs.Pick> lampaPicks = new ArrayList<>();
-    private String lampaKey = "";               // data version and language the picks were built for
-    private int cardPage;
+    /** New Lampa lists arrived: the cards are rebuilt (Recs.now merges them into the three tabs). */
     private final LampaLists.Listener lampaListener = new LampaLists.Listener() {
         @Override public void onLampa() { updatePicks(); }
     };
@@ -473,7 +466,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         promptLayer.setVisibility(INVISIBLE);
         setContentDescription("Free My TV");
         drawerLayer.setVisibility(INVISIBLE);
-        for (int i = 0; i < TOP_ITEMS; i++) {
+        for (int i = 0; i < 6; i++) {
             topFocus[i] = new Spring(0.26f, 0.85f, 0);
             topRects[i] = new RectF();
         }
@@ -1260,7 +1253,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         Paint text = lQuote;
         // The corner buttons' names appear in this row: the quotes fade out while one of them has focus.
         float fade = 1;
-        for (int i = TAB_COUNT; i < TOP_ITEMS; i++) fade = Math.min(fade, 1 - Ui.clamp(topFocus[i].value));
+        for (int i = 3; i < 6; i++) fade = Math.min(fade, 1 - Ui.clamp(topFocus[i].value));
         if (fade <= 0.01f) return;
         int textColor = text.getColor();
         text.setColor(Ui.alpha(textColor, fade));
@@ -1919,14 +1912,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             final List<HomeApps.Item> st = statusList(c);
             final List<HomeApps.Item> d = drawerList(c);
             final List<HomeApps.Item> o = HomeApps.others(c);
-            LampaLists.load(c);
-            lampaInstalled = LampaLists.available(c);
+            LampaLists.refresh(c);   // loads what is saved, and whether Lampa is on the TV
             handler.post(() -> {
                 setShelf(s);
                 setStatusItems(st);
                 setDrawerItems(d);
                 if (!sheetOpen) setOthers(o);
-                updatePicks();   // the Lampa tab: what is saved and whether Lampa is there
+                updatePicks();   // Lampa titles are part of the tabs' cards
             });
         });
     }
@@ -2121,11 +2113,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             it = drawerItems.get(drawerIndex);
             r = drawerRects[drawerIndex];
         } else if (zone == Z_TOP) {
-            if (topIndex < TAB_COUNT) {
+            if (topIndex < 3) {
                 selectTab(topIndex);
                 return;
             }
-            it = lightButtons.get(topIndex - TAB_COUNT);
+            it = lightButtons.get(topIndex - 3);
             r = topRects[topIndex];
         } else if (zone == Z_CARDS) {
             Recs.Pick p = cardIndex < cards.size() ? cards.get(cardIndex) : null;
@@ -2187,7 +2179,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             for (int i = 0; i < others.size(); i++) out.add(a11yId(GRID, i));
             return;
         }
-        for (int i = 0; i < TAB_COUNT + lightButtons.size(); i++) if (i != LAMPA_TAB || lampaTab) out.add(a11yId(Z_TOP, i));
+        for (int i = 0; i < 3 + lightButtons.size(); i++) out.add(a11yId(Z_TOP, i));
         for (int i = 0; i < Math.min(3, cards.size()); i++) out.add(a11yId(Z_CARDS, i));
         for (int i = 0; i < shelf.size(); i++) out.add(a11yId(Z_SHELF, i));
         for (int i = 0; i < drawerItems.size(); i++) out.add(a11yId(Z_DRAWER, i));
@@ -2200,9 +2192,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (i >= others.size()) return "";
                 return label(others, i) + ", " + (i + 1) + Ui.tr(" de ", " of ") + others.size();
             case Z_TOP:
-                if (i >= TAB_COUNT) return label(lightButtons, i - TAB_COUNT);
-                int tabs = lampaTab ? TAB_COUNT : TAB_COUNT - 1;
-                return tabs()[i] + Ui.tr(", aba ", ", tab ") + (i + 1) + Ui.tr(" de " + tabs, " of " + tabs, " de " + tabs);
+                if (i >= 3) return label(lightButtons, i - 3);
+                return tabs()[i] + Ui.tr(", aba ", ", tab ") + (i + 1) + Ui.tr(" de 3", " of 3");
             case Z_CARDS: return i < cards.size() ? pickText(cards.get(i)) : "";
             case Z_SHELF: return label(shelf, i);
             case Z_DRAWER: return label(drawerItems, i);
@@ -2228,9 +2219,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 break;
             }
             case Z_TOP:
-                if (i >= TAB_COUNT + lightButtons.size() || (i == LAMPA_TAB && !lampaTab)) return false;
+                if (i >= 3 + lightButtons.size()) return false;
                 a11yRect.set(topRects[i]);
-                dy = (i < TAB_COUNT ? heroLayer : status).getTranslationY();
+                dy = (i < 3 ? heroLayer : status).getTranslationY();
                 break;
             case Z_CARDS:
                 if (i >= Math.min(3, cards.size())) return false;
@@ -2288,10 +2279,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 drawerIndex = i;
                 break;
             case Z_TOP:
-                if (i >= TAB_COUNT + lightButtons.size() || (i == LAMPA_TAB && !lampaTab)) return;
+                if (i >= 3 + lightButtons.size()) return;
                 if (drawerOpen) closeDrawer();
                 topIndex = i;
-                if (i < TAB_COUNT) selectTab(i);
+                if (i < 3) selectTab(i);
                 break;
             case Z_CARDS:
                 if (i >= cards.size()) return;
@@ -2332,18 +2323,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // Text tabs; the focus pill extends 26 px past the text (the first tab's text starts at the margin).
         float pad = 26 * k, tabTop = L_TABBAR_TOP * k, tabBottom = (L_TABBAR_TOP + L_TABBAR_H) * k;
         float x = MARGIN * k - pad;
-        for (int i = 0; i < TAB_COUNT; i++) {
-            if (i == LAMPA_TAB && !lampaTab) {
-                topRects[i].setEmpty();
-                continue;
-            }
+        for (int i = 0; i < 3; i++) {
             float tw = Math.max(lTabOn.measureText(tabs()[i]), lTab.measureText(tabs()[i]));
             topRects[i].set(x, tabTop, x + tw + 2 * pad, tabBottom);
             x = topRects[i].right + 4 * k;
         }
         float b = L_BUTTON * k, right = CONTENT_R * k, cy = L_BUTTON_CY * k;
         for (int i = 2; i >= 0; i--) {
-            topRects[TAB_COUNT + i].set(right - b, cy - b / 2, right, cy + b / 2);
+            topRects[3 + i].set(right - b, cy - b / 2, right, cy + b / 2);
             right -= b + L_BUTTON_GAP * k;
         }
         float top = L_CARDS_TOP * k, ch = L_CARD_H * k, g = L_CARD_GAP * k, left = MARGIN * k, tall = L_TALL_W * k;
@@ -2354,19 +2341,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         heroDirty = statusDirty = true;
     }
 
-    /**
-     * The three cards of the current tab (Explore, Movies, Shows, or three of the Lampa lists' titles) and the
-     * background taken from the first one.
-     */
+    /** The three cards of the current tab (Explore, Movies, Shows) and the background taken from the first one. */
     private void updateCards() {
-        refreshLampa();
-        List<Recs.Pick> list;
-        if (tab == LAMPA_TAB) {
-            cardPage = Math.max(0, Math.min(cardPage, (lampaPicks.size() - 1) / 3));
-            list = new ArrayList<>(lampaPicks.subList(Math.min(cardPage * 3, lampaPicks.size()), Math.min(cardPage * 3 + 3, lampaPicks.size())));
-        } else {
-            list = recs.now(TAB_KIND[tab]);
-        }
+        List<Recs.Pick> list = recs.now(TAB_KIND[tab]);
         if (!samePicks(list, cards)) {
             cards = list;
             cardIndex = Math.min(cardIndex, Math.max(0, list.size() - 1));
@@ -2375,41 +2352,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 retarget(false);
             }
         }
-        // The three other tabs are preloaded (switching tabs is instant); the Lampa tab loads its own three.
-        for (Recs.Pick p : tab == LAMPA_TAB ? cards : recs.wanted()) recs.backdrop(p);
+        for (Recs.Pick p : recs.wanted()) recs.backdrop(p);   // all three tabs preloaded: switching tabs is instant
         Backdrop b = cards.isEmpty() ? null : recs.backdrop(cards.get(0));
         if (cards.isEmpty() || b != null) showBackdrop(b);
         heroDirty = true;
         spoken.focusMoved();    // new picks under the focused card
     }
 
-    /** The Lampa tab shows when Lampa is on the TV and has titles; it appears or goes away as the data changes. */
-    private void refreshLampa() {
-        if (lampaInstalled && LampaLists.any()) {
-            String key = LampaLists.version() + "|" + Ui.language;
-            if (!key.equals(lampaKey)) {
-                lampaKey = key;
-                lampaPicks = LampaLists.picks();
-            }
-        } else {
-            lampaKey = "";
-            lampaPicks = new ArrayList<>();
-        }
-        boolean show = !lampaPicks.isEmpty();
-        if (show == lampaTab) return;
-        lampaTab = show;
-        if (!show) {
-            cardPage = 0;
-            if (topIndex == LAMPA_TAB) topIndex = 0;
-            if (tab == LAMPA_TAB) tab = 0;   // updateCards, right after this, fills the cards of Explore
-        }
-        layoutLight();
-    }
-
     private void selectTab(int index) {
         if (index == tab) return;
         tab = index;
-        cardPage = 0;
         updateCards();
         heroDirty = true;
     }
@@ -2459,8 +2411,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // Text tabs (the selected one in bold, in the main text color); with focus on the tabs, the selected one gets
         // the white pill with a shadow and grows a little (the tvOS focus).
         float focus = Ui.clamp(topFocus[tab].value);
-        for (int i = 0; i < TAB_COUNT; i++) {
-            if (i == LAMPA_TAB && !lampaTab) continue;
+        for (int i = 0; i < 3; i++) {
             RectF r = topRects[i];
             if (i == tab && focus > 0.01f) {
                 float s = 1 + 0.05f * focus;
@@ -2544,8 +2495,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void drawLightButtons(Canvas c) {
         applyTone();
         for (int i = 0; i < 3; i++) {
-            RectF r = topRects[TAB_COUNT + i];
-            float f = Ui.clamp(topFocus[TAB_COUNT + i].value), s = 1 + 0.1f * f, rad = r.width() / 2 * s;
+            RectF r = topRects[3 + i];
+            float f = Ui.clamp(topFocus[3 + i].value), s = 1 + 0.1f * f, rad = r.width() / 2 * s;
             cell.set(r.centerX() - rad, r.centerY() - rad, r.centerX() + rad, r.centerY() + rad);
             tmp.set(cell);
             tmp.offset(0, (6 + 8 * f) * k);
@@ -2584,19 +2535,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 break;
             case Z_CARDS:
                 if (dx != 0) {
-                    int next = cardIndex + dx;
-                    if (tab == LAMPA_TAB && (next < 0 || next >= cards.size())) {
-                        // Past the last (or before the first) card: the next (or previous) three titles.
-                        int page = cardPage + dx;
-                        if (page < 0 || page * 3 >= lampaPicks.size()) return true;
-                        cardPage = page;
-                        updateCards();
-                        cardIndex = dx > 0 ? 0 : Math.max(0, cards.size() - 1);
-                    } else {
-                        next = Math.max(0, Math.min(cards.size() - 1, next));
-                        if (next == cardIndex) return true;
-                        cardIndex = next;
-                    }
+                    int next = Math.max(0, Math.min(cards.size() - 1, cardIndex + dx));
+                    if (next == cardIndex) return true;
+                    cardIndex = next;
                 } else if (dy < 0) {
                     zone = Z_TOP;
                     topIndex = tab;     // as on Apple TV: moving up to the tabs focuses the selected tab
@@ -2607,12 +2548,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 break;
             case Z_TOP:
                 if (dx != 0) {
-                    int next = topIndex + dx;
-                    if (next == LAMPA_TAB && !lampaTab) next += dx;   // no Lampa tab: step over its place
-                    next = Math.max(0, Math.min(TOP_ITEMS - 1, next));
+                    int next = Math.max(0, Math.min(5, topIndex + dx));
                     if (next == topIndex) return true;
                     topIndex = next;
-                    if (topIndex < TAB_COUNT) selectTab(topIndex);   // like Apple TV tabs: focusing a tab selects it
+                    if (topIndex < 3) selectTab(topIndex);   // like Apple TV tabs: focusing a tab selects it
                 } else if (dy > 0) {
                     if (cards.isEmpty()) {
                         zone = Z_SHELF;

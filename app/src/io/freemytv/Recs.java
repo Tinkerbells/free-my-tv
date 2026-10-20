@@ -134,13 +134,25 @@ final class Recs {
 
     /** Last fetch, for the settings screen: {count, error, at}. Written by the home screen (another process). */
     static JSONObject status(Context c) {
+        JSONObject status = new JSONObject();
         File f = new File(c.getFilesDir(), "recs-status.json");
-        if (!f.exists() || !hasKey(c)) return new JSONObject();
-        try (FileInputStream in = new FileInputStream(f)) {
-            return new JSONObject(read(in));
-        } catch (Exception e) {
-            return new JSONObject();
+        if (f.exists() && hasKey(c)) {
+            try (FileInputStream in = new FileInputStream(f)) {
+                status = new JSONObject(read(in));
+            } catch (Exception e) {
+                status = new JSONObject();
+            }
         }
+        // The Lampa titles fill the tabs even when TMDB finds nothing for this TV's apps: an error only counts
+        // when there is nothing at all to show.
+        int lampa = LampaLists.count(c);
+        if (lampa > 0) {
+            try {
+                status.put("error", "").put("count", status.optInt("count") + lampa);
+            } catch (Exception ignored) {
+            }
+        }
+        return status;
     }
 
     private void writeStatus() {
@@ -169,8 +181,22 @@ final class Recs {
         return now(null);
     }
 
-    /** This hour's 3, movies only ("movie") or shows only ("tv"); null = both (the home screen tabs). */
+    /**
+     * What a tab shows (movies only "movie", shows only "tv", both null; at most 3): the user's Lampa titles first
+     * (LampaLists: always there, not rotated, and independent of the TMDB key), then this hour's streaming picks.
+     * A title in both is the Lampa one.
+     */
     List<Pick> now(String kind) {
+        List<Pick> out = new ArrayList<>(LampaLists.picks(kind));
+        if (out.size() >= 3) return out;
+        java.util.Set<String> have = new java.util.HashSet<>();
+        for (Pick p : out) have.add(key(p));
+        for (Pick p : tmdbNow(kind)) if (out.size() < 3 && have.add(key(p))) out.add(p);
+        return out;
+    }
+
+    /** This hour's 3 streaming picks, movies only ("movie") or shows only ("tv"); null = both. */
+    private List<Pick> tmdbNow(String kind) {
         List<Pick> list = new ArrayList<>();
         if (!hasKey(context)) return list;    // no TMDB key: no recommendations
         Map<String, Boolean> have = new HashMap<>();   // one look per app, not per title (this runs every 15 s)
@@ -244,7 +270,7 @@ final class Recs {
         boolean stale = newKey || p != period || now - listAt > LIST_EVERY || now < listAt || picks.isEmpty()
                 || !listLanguage.equals(Ui.language);
         boolean missing = false;
-        for (Pick pick : wanted()) missing |= !pick.detailed || !hasImage(pick);
+        for (Pick pick : tmdbWanted()) missing |= !pick.detailed || !hasImage(pick);
         if (!stale && !missing) return;
         keyStamp = stamp;
         fetching = true;
@@ -254,7 +280,7 @@ final class Recs {
                 // One failing title doesn't stop the others; whatever has no app on the TV is not downloaded.
                 int failures = 0, tried = 0;
                 String last = "";
-                for (Pick pick : wanted()) {
+                for (Pick pick : tmdbWanted()) {
                     tried++;
                     try {
                         if (!pick.detailed) fetchDetails(pick);
@@ -297,7 +323,7 @@ final class Recs {
         List<Pick> out = new ArrayList<>();
         if (!hasKey(context)) return out;
         java.util.Set<String> seen = new java.util.HashSet<>();
-        for (Pick p : wanted()) if (hasImage(p) && seen.add(franchise(p.title))) out.add(p);
+        for (Pick p : tmdbWanted()) if (hasImage(p) && seen.add(franchise(p.title))) out.add(p);
         Map<String, Boolean> have = new HashMap<>();
         for (Pick p : picks) {
             if (p.detailed && p.pkg != null && have.computeIfAbsent(p.pkg, this::installed) && hasImage(p)
@@ -350,12 +376,22 @@ final class Recs {
         });
     }
 
-    /** This hour's picks for the three tabs (Explore, Movies, Shows), without repeats. */
+    /** This hour's picks for the three tabs (Explore, Movies, Shows), Lampa titles included, without repeats. */
     List<Pick> wanted() {
         List<Pick> out = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
         for (String kind : new String[] {null, "movie", "tv"}) {
             for (Pick p : now(kind)) if (seen.add(key(p))) out.add(p);
+        }
+        return out;
+    }
+
+    /** The same without the Lampa titles: the ones that need TMDB details and a download (and the screensaver's). */
+    private List<Pick> tmdbWanted() {
+        List<Pick> out = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (String kind : new String[] {null, "movie", "tv"}) {
+            for (Pick p : tmdbNow(kind)) if (seen.add(key(p))) out.add(p);
         }
         return out;
     }

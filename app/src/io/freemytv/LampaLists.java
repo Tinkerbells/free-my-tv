@@ -60,8 +60,8 @@ final class LampaLists {
 
     interface Listener { void onLampa(); }
 
-    private static final int MAX_LISTS = 16, MAX_PER_LIST = 100, TAB_MAX = 30;
-    /** What the home screen's Lampa tab shows, in this order (the rest of the lists stay stored). */
+    private static final int MAX_LISTS = 16, MAX_PER_LIST = 100, CARDS = 3;
+    /** What the home screen's tabs show from Lampa, first to last (the other lists stay stored). */
     private static final String[] TAB_LISTS = {"wath", "continued", "scheduled", "book", "history"};
     private static final Pattern NAME = Pattern.compile("[a-z_]{1,24}"), SOURCE = Pattern.compile("[a-z0-9_]{1,20}");
     /** A TMDB image path, or an https address. */
@@ -70,12 +70,13 @@ final class LampaLists {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final List<Listener> LISTENERS = new CopyOnWriteArrayList<>();
     private static volatile Map<String, List<Entry>> lists = Collections.emptyMap();
+    /** Goes up on every change of the data (identical data sent again, as the plugin does every 10 minutes, isn't one). */
     private static volatile int version;
     private static boolean loaded;
     private static String content = "";   // what is held, without the time: an identical update changes nothing
-
-    /** Goes up on every change of the data (identical data sent again, as the plugin does every 10 minutes, isn't one). */
-    static int version() { return version; }
+    private static volatile boolean installed, checked;
+    private static int countVersion = -1, countValue;
+    private static final Object CACHE = new Object();   // not the class lock: a save in progress must not stall the home screen
 
     static void addListener(Listener l) { if (!LISTENERS.contains(l)) LISTENERS.add(l); }
     static void removeListener(Listener l) { LISTENERS.remove(l); }
@@ -85,14 +86,30 @@ final class LampaLists {
         return l == null ? Collections.<Entry>emptyList() : l;
     }
 
-    /** True when any list the Lampa tab shows has something in it. */
-    static boolean any() {
-        for (String name : TAB_LISTS) if (!list(name).isEmpty()) return true;
-        return false;
+    /** Reads what is saved and checks that Lampa is installed. Off the UI thread. */
+    static void refresh(Context c) {
+        load(c);
+        installed = available(c);
+        checked = true;
     }
 
     static boolean available(Context c) {
         return HomeApps.launchIntent(c.getPackageManager(), PKG) != null;
+    }
+
+    /** Titles the tabs can draw from (distinct, across the lists they use); 0 without Lampa. For the settings status. */
+    static int count(Context c) {
+        if (!checked) refresh(c);
+        if (!installed) return 0;
+        synchronized (CACHE) {
+            if (countVersion != version) {
+                Set<String> seen = new HashSet<>();
+                for (String name : TAB_LISTS) for (Entry e : list(name)) seen.add(e.key());
+                countVersion = version;
+                countValue = seen.size();
+            }
+            return countValue;
+        }
     }
 
     // MARK: - Receiving and saving
@@ -243,37 +260,61 @@ final class LampaLists {
         return IMAGE.matcher(s).matches() ? s : "";
     }
 
-    // MARK: - The home screen's Lampa tab
+    // MARK: - Titles for the home screen's tabs (merged into Recs.now)
+
+    private static String picksKey = "";
+    private static List<Recs.Pick> picksAll = Collections.emptyList(), picksMovies = picksAll, picksShows = picksAll;
 
     /**
-     * The tab's titles: Watch later, then Continue, Scheduled and Bookmarks, then History; without repeats, up to 30.
-     * Each carries its list's name in the line under the title. Built on the main thread, only when the data or the
-     * language changes.
+     * The Lampa titles one tab shows (null = Explore: both kinds; "movie" or "tv" for the others), up to three:
+     * Watch later first, then Continue, Scheduled and Bookmarks, then History, without repeats. Each carries its
+     * list's name, year and rating in the line under the title. Built again only when the data or the language
+     * changes; empty without Lampa on the TV.
      */
-    static List<Recs.Pick> picks() {
-        List<Recs.Pick> out = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-        for (String name : TAB_LISTS) {
-            String label = label(name);
-            for (Entry e : list(name)) {
-                if (out.size() >= TAB_MAX) return out;
-                if (!seen.add(e.key())) continue;
-                Recs.Pick p = new Recs.Pick();
-                p.id = e.id;
-                p.kind = e.type;
-                p.title = e.title;
-                p.backdrop = !e.backdrop.isEmpty() ? e.backdrop : !e.poster.isEmpty() ? e.poster : null;
-                StringBuilder meta = new StringBuilder(label);
-                if (e.year > 0) meta.append(" · ").append(e.year);
-                if (e.rating > 0) meta.append(" · ★ ").append(String.format(Locale.US, "%.1f", e.rating));
-                p.meta = meta.toString();
-                p.detailed = true;
-                p.lampa = true;
-                p.source = e.source;
-                out.add(p);
-            }
+    static List<Recs.Pick> picks(String kind) {
+        if (!installed) return Collections.emptyList();
+        synchronized (CACHE) {
+            return picksLocked(kind);
         }
-        return out;
+    }
+
+    private static List<Recs.Pick> picksLocked(String kind) {
+        String key = version + "|" + Ui.language;
+        if (!key.equals(picksKey)) {
+            picksKey = key;
+            List<Recs.Pick> all = new ArrayList<>(), movies = new ArrayList<>(), shows = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            for (String name : TAB_LISTS) {
+                String label = label(name);
+                for (Entry e : list(name)) {
+                    if (!seen.add(e.key())) continue;
+                    Recs.Pick p = pick(e, label);
+                    if (all.size() < CARDS) all.add(p);
+                    List<Recs.Pick> own = e.type.equals("movie") ? movies : shows;
+                    if (own.size() < CARDS) own.add(p);
+                }
+            }
+            picksAll = Collections.unmodifiableList(all);
+            picksMovies = Collections.unmodifiableList(movies);
+            picksShows = Collections.unmodifiableList(shows);
+        }
+        return kind == null ? picksAll : kind.equals("movie") ? picksMovies : picksShows;
+    }
+
+    private static Recs.Pick pick(Entry e, String label) {
+        Recs.Pick p = new Recs.Pick();
+        p.id = e.id;
+        p.kind = e.type;
+        p.title = e.title;
+        p.backdrop = !e.backdrop.isEmpty() ? e.backdrop : !e.poster.isEmpty() ? e.poster : null;
+        StringBuilder meta = new StringBuilder(label);
+        if (e.year > 0) meta.append(" · ").append(e.year);
+        if (e.rating > 0) meta.append(" · ★ ").append(String.format(Locale.US, "%.1f", e.rating));
+        p.meta = meta.toString();
+        p.detailed = true;   // nothing to fetch: what the plugin sent is what shows
+        p.lampa = true;
+        p.source = e.source;
+        return p;
     }
 
     private static String label(String name) {
@@ -281,7 +322,7 @@ final class LampaLists {
             case "wath": return Ui.tr("Ver depois", "Watch later", "Ver después");
             case "continued": return Ui.tr("Continuar", "Continue", "Continuar");
             case "scheduled": return Ui.tr("Agendado", "Scheduled", "Programado");
-            case "book": return Ui.tr("Marcadores", "Bookmarks", "Marcadores");
+            case "book": return Ui.tr("Favoritos", "Bookmarks", "Favoritos");
             default: return Ui.tr("Histórico", "History", "Historial");
         }
     }

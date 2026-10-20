@@ -24,6 +24,7 @@ final class Spanish {
             case "Couldn't open ": return "No se pudo abrir ";
             case " of ": return " de ";
             case ", tab ": return ", pestaña ";
+            case " of 3": return " de 3";
             case "Dollar": return "Dólar";
             case "Series": return "Serie";
             case "prices from ": return "precios de ";
