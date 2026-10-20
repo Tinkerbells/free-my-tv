@@ -118,4 +118,11 @@ final class Prefs {
     /** Package the key opens ("" = nothing). */
     static String keyApp(int keyCode) { return sp().getString("key" + keyCode, defaultApp(keyCode)); }
     static void setKeyApp(int keyCode, String pkg) { put("key" + keyCode, pkg); }
+
+    // MARK: - Sleep timer
+
+    /** Wall-clock millis when the TV goes to sleep; 0 = no timer. No `version` bump: the home screen must not restart. */
+    static long sleepAt() { return app == null ? 0 : sp().getLong("sleepAt", 0); }
+    static int sleepMinutes() { return sp().getInt("sleepMinutes", 0); }
+    static void setSleep(long at, int minutes) { sp().edit().putLong("sleepAt", at).putInt("sleepMinutes", minutes).apply(); }
 }

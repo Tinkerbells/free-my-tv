@@ -83,7 +83,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final long TOAST_MS = 6000, FADE_MS = 800;
     /** Blur radii of the shadow and shadowDeep paints (Shadows needs them to draw the same blur on older TVs). */
     private static final float SHADOW_BLUR = 26, DEEP_BLUR = 30;
-    private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7;
+    private static final int SKY = 0, HERO = 1, STATUS = 2, PLATTER = 3, TILES = 4, DRAWER = 5, SHEET = 6, TOAST = 7, PROMPT = 8;
     private static final int Z_STATUS = 0, Z_HERO = 1, Z_SHELF = 2, Z_DRAWER = 3;
     private static final ExecutorService LOADER = Executors.newSingleThreadExecutor();
     // Light design (the L_ constants): title, tab bar, three recommendation cards and the shelf.
@@ -115,7 +115,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         @Override public void click(int id) { activate(); }
     });
     private final RectF a11yRect = new RectF();
-    private final Layer sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer;
+    private final Layer sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer, promptLayer;
     private int zone = Z_SHELF;
 
     // Night look (like Apple's "Automatic" appearance): darker from sunset to sunrise, with a 2 s transition.
@@ -212,9 +212,15 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private String clockText = "";
     private long clockMinute = -1;
     private boolean okDown, backDown;
+    // Sleep timer prompt (long-press OK on its drawer tile): minutes typed or stepped with the remote.
+    private boolean promptOpen, promptTyping;
+    private int promptMinutes;
+    private String promptText = "";
+    private final RectF promptRect = new RectF();
 
     private Paint labelPaint, metaPaint, clockPaint, buttonPaint, capsuleText, tipPaint, quotePaint, staleQuote;
     private Paint rowTitle, drawerLabel, cardTitle, cardText, cardDim, cardDimRight, bigTemp, hourPaint, hourTemp;
+    private Paint promptBig, promptHint;
     private Paint pricePaint, changePaint, sheetTitle;
     private TextPaint titlePaint, gridLabel, toastPaint;
     private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
@@ -272,6 +278,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 case TILES: drawTiles(c); break;
                 case DRAWER: drawDrawer(c); break;
                 case SHEET: drawSheet(c); break;
+                case PROMPT: drawPrompt(c); break;
                 default: drawToast(c); break;
             }
             scene.setOffset(0, 0);
@@ -297,6 +304,134 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
     };
 
+    /** The drawer's sleep timer label, rebuilt here once a second (never while drawing) while a timer runs. */
+    private final Runnable sleepTick = new Runnable() {
+        @Override public void run() {
+            if (!running) return;
+            if (!SleepTimer.active()) SleepTimer.dropStale(getContext());
+            String label = SleepTimer.label();
+            for (HomeApps.Item it : drawerItems) {
+                if (it.kind == HomeApps.SLEEP_TIMER && !label.equals(it.label)) {
+                    it.label = label;
+                    drawerDirty = true;
+                }
+            }
+            if (SleepTimer.active()) handler.postDelayed(this, SleepTimer.untilTick());   // right on the next second
+        }
+    };
+
+    private boolean sleepTileFocused() {
+        return !sheetOpen && drawerOpen && zone == Z_DRAWER && drawerIndex < drawerItems.size()
+                && drawerItems.get(drawerIndex).kind == HomeApps.SLEEP_TIMER;
+    }
+
+    /** Same feedback for a preset and for the prompt; also restarts the tile's countdown. */
+    private void sleepToast(int minutes) {
+        showToast(minutes == 0
+                ? Ui.tr("Timer de sono desligado", "Sleep timer off", "Temporizador de sueño apagado")
+                : Ui.tr("A TV desliga em " + minutes + " min", "TV turns off in " + minutes + " min",
+                        "El TV se apaga en " + minutes + " min"));
+        handler.removeCallbacks(sleepTick);
+        sleepTick.run();
+    }
+
+    private void openPrompt() {
+        promptMinutes = SleepTimer.active() ? Math.max(1, Math.min(720, Prefs.sleepMinutes())) : 30;
+        promptTyping = false;
+        promptOpen = true;
+        promptChanged(false);
+        promptLayer.setVisibility(VISIBLE);
+        click.open();
+    }
+
+    private void closePrompt() {
+        promptOpen = false;
+        promptTyping = false;
+        promptLayer.setVisibility(INVISIBLE);
+    }
+
+    private void promptChanged(boolean announce) {
+        promptText = promptMinutes + " min";
+        promptLayer.invalidate();
+        if (announce) announceForAccessibility(promptText);
+    }
+
+    private void promptConfirm() {
+        int minutes = Math.max(1, promptMinutes);
+        closePrompt();
+        SleepTimer.setMinutes(getContext().getApplicationContext(), minutes);
+        sleepToast(minutes);
+    }
+
+    /** While the prompt is open it takes every key except the system's (Back is handled by back()). */
+    private boolean promptKey(KeyEvent e) {
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        int code = e.getKeyCode(), repeat = e.getRepeatCount();
+        int digit = code >= KeyEvent.KEYCODE_0 && code <= KeyEvent.KEYCODE_9 ? code - KeyEvent.KEYCODE_0
+                : code >= KeyEvent.KEYCODE_NUMPAD_0 && code <= KeyEvent.KEYCODE_NUMPAD_9 ? code - KeyEvent.KEYCODE_NUMPAD_0 : -1;
+        if (digit >= 0) {
+            if (down && repeat == 0) {
+                // Digits append; a digit after a 3-digit value starts over.
+                int v = promptTyping && promptMinutes < 100 ? promptMinutes * 10 + digit : digit;
+                promptTyping = true;
+                promptMinutes = Math.min(720, v);
+                promptChanged(true);
+            }
+            return true;
+        }
+        switch (code) {
+            case KeyEvent.KEYCODE_DPAD_UP:
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                if (down) {
+                    boolean big = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN;
+                    int step = (big ? 5 : 1) * (repeat >= 10 ? 3 : 1);   // holding speeds up
+                    int sign = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : -1;
+                    promptTyping = false;
+                    promptMinutes = Math.max(1, Math.min(720, Math.max(1, promptMinutes) + sign * step));
+                    promptChanged(repeat == 0);
+                }
+                return true;
+            case KeyEvent.KEYCODE_DEL:
+                if (down && repeat == 0 && promptTyping) {
+                    promptMinutes /= 10;
+                    promptChanged(true);
+                }
+                return true;
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                // Confirms on release; the release of the long press that opened the prompt (okDown is off) does nothing.
+                if (down) {
+                    if (repeat == 0) okDown = true;
+                } else {
+                    if (okDown && !e.isCanceled()) promptConfirm();
+                    okDown = false;
+                }
+                return true;
+            default:
+                return !e.isSystem();
+        }
+    }
+
+    private void drawPrompt(Canvas c) {
+        if (!promptOpen) return;
+        float pad = 40 * k;
+        promptRect.set(promptLayer.getLeft() + pad, promptLayer.getTop() + pad, promptLayer.getRight() - pad, promptLayer.getBottom() - pad);
+        drawerGlass(c, promptRect, 40 * k, 0.8f, 0x33000000, 14 * k);
+        float cx = promptRect.centerX();
+        promptHint.setColor(tone(L_DIM, 0xB3FFFFFF));
+        c.drawText(Ui.tr("Timer de sono", "Sleep timer", "Temporizador de sueño"), cx, promptRect.top + 66 * k, promptHint);
+        promptBig.setColor(drawerInk(1));
+        c.drawText(promptText, cx, promptRect.centerY() + 40 * k, promptBig);
+        promptHint.setColor(tone(L_DIM, 0xADFFFFFF));
+        c.drawText(Ui.tr("Cima/Baixo 5 min · Esquerda/Direita 1 min", "Up/Down 5 min · Left/Right 1 min",
+                "Arriba/Abajo 5 min · Izquierda/Derecha 1 min"), cx, promptRect.bottom - 84 * k, promptHint);
+        c.drawText(Ui.tr("ou digite os números · OK inicia · Voltar cancela", "or type digits · OK to start · Back to cancel",
+                "o escribe los números · OK inicia · Atrás cancela"), cx, promptRect.bottom - 46 * k, promptHint);
+    }
+
     HomeView(Activity a) {
         super(a);
         activity = a;
@@ -314,15 +449,17 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         drawerLayer = new Layer(a, DRAWER);
         sheetLayer = new Layer(a, SHEET);
         toastLayer = new Layer(a, TOAST);
+        promptLayer = new Layer(a, PROMPT);
         // Hardware layers on the GPU: only the one that changed is redrawn; moving, fading and scaling stay cheap.
         // Not on Android 9 to 11: on older GPUs (a Mi Box 3's Mali-450) redrawing and compositing a big layer on every
         // frame cost more than drawing straight to the screen (measured: focus on the picks 33 → 12 ms a frame, the
         // drawer 19 → 17 ms).
         for (View v : new View[] {heroLayer, status, platter, tiles, drawerLayer, sheetLayer}) v.setLayerType(Ui.LEGACY ? LAYER_TYPE_NONE : LAYER_TYPE_HARDWARE, null);
-        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer}) {
+        for (View v : new View[] {sky, heroLayer, status, platter, tiles, drawerLayer, sheetLayer, toastLayer, promptLayer}) {
             v.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);   // TalkBack reads the items (Spoken)
             addView(v);
         }
+        promptLayer.setVisibility(INVISIBLE);
         setContentDescription("Free My TV");
         drawerLayer.setVisibility(INVISIBLE);
         for (int i = 0; i < 6; i++) {
@@ -360,6 +497,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         recs.refreshIfStale();
         if (tvInputs != null) tvInputs.registerCallback(inputCallback, handler);
         handler.postDelayed(tick, 15_000);
+        handler.removeCallbacks(sleepTick);
+        sleepTick.run();
         checkNotices();
         reload();
         updatePalette();
@@ -377,6 +516,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         running = false;
         Choreographer.getInstance().removeFrameCallback(this);
         handler.removeCallbacks(tick);
+        handler.removeCallbacks(sleepTick);
+        if (promptOpen) closePrompt();
         data.removeListener(this);
         recs.removeListener(this);
         if (tvInputs != null) tvInputs.unregisterCallback(inputCallback);
@@ -393,6 +534,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         shelfIndex = 0;
         sheetOpen = false;
         drawerOpen = false;
+        if (promptOpen) closePrompt();
         if (animated) {
             sheet.target = 0;
             drawer.target = 0;
@@ -452,6 +594,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         measure(drawerLayer, width, Math.round(600 * kk));
         measure(sheetLayer, width, height);
         measure(toastLayer, Math.round(1000 * kk), Math.round(220 * kk));
+        measure(promptLayer, Math.round(1000 * kk), Math.round(460 * kk));
         setMeasuredDimension(width, height);
     }
 
@@ -472,6 +615,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         sheetLayer.setPivotX(width / 2f);
         sheetLayer.setPivotY(height / 2f);
         place(toastLayer, (width - toastLayer.getMeasuredWidth()) / 2, 0);
+        place(promptLayer, (width - promptLayer.getMeasuredWidth()) / 2, (height - promptLayer.getMeasuredHeight()) / 2);
     }
 
     private static void place(View v, int x, int y) {
@@ -551,6 +695,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         gridLabel = new TextPaint(Ui.text(Ui.medium, 24 * k, 0x99FFFFFF));
         gridLabel.setTextAlign(Paint.Align.CENTER);
         toastPaint = new TextPaint(Ui.text(Ui.medium, 26 * k, 0xF2FFFFFF));
+        promptBig = Ui.numbers(Ui.light, 130 * k, 0xFFFFFFFF);
+        promptBig.setTextAlign(Paint.Align.CENTER);
+        promptHint = Ui.text(Ui.medium, 24 * k, 0xADFFFFFF);
+        promptHint.setTextAlign(Paint.Align.CENTER);
         shadow.setMaskFilter(new BlurMaskFilter(SHADOW_BLUR * k, BlurMaskFilter.Blur.NORMAL));
         shadowSoft.setMaskFilter(new BlurMaskFilter(12 * k, BlurMaskFilter.Blur.NORMAL));
         shadowDeep.setMaskFilter(new BlurMaskFilter(DEEP_BLUR * k, BlurMaskFilter.Blur.NORMAL));
@@ -1283,7 +1431,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         while (inputs < list.size() && (list.get(inputs).kind == HomeApps.INPUT || list.get(inputs).kind == HomeApps.LIVE_TV)) inputs++;
         boolean same = list.size() == drawerItems.size();
         for (int i = 0; same && i < list.size(); i++) {
-            same = list.get(i).key.equals(drawerItems.get(i).key) && list.get(i).connected == drawerItems.get(i).connected;
+            same = list.get(i).key.equals(drawerItems.get(i).key) && list.get(i).connected == drawerItems.get(i).connected
+                    && list.get(i).label.equals(drawerItems.get(i).label);
         }
         drawerItems = list;
         drawerInputs = inputs;
@@ -1768,6 +1917,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     boolean onKey(KeyEvent e) {
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        if (promptOpen && e.getKeyCode() != KeyEvent.KEYCODE_BACK) return promptKey(e);
         switch (e.getKeyCode()) {
             case KeyEvent.KEYCODE_DPAD_LEFT:
                 if (down) move(-1, 0);
@@ -1788,6 +1938,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 // app opens nothing.
                 if (down) {
                     if (e.getRepeatCount() == 0) okDown = true;
+                    else if (okDown && sleepTileFocused()) {   // long press: the sleep timer's own minutes
+                        okDown = false;                        // its release must not also cycle the presets
+                        openPrompt();
+                    }
                 } else {
                     if (okDown && !e.isCanceled() && spoken.keyClick()) activate();
                     okDown = false;
@@ -1807,6 +1961,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private void back() {
+        if (promptOpen) {
+            closePrompt();
+            click.move();
+            return;
+        }
         if (sheetOpen) {
             closeSheet();
         } else if (zone == Z_DRAWER) {
@@ -1961,6 +2120,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             r = tileRects[shelfIndex];
         }
         click.open();
+        if (it.kind == HomeApps.SLEEP_TIMER) {
+            sleepToast(SleepTimer.next(getContext().getApplicationContext()));
+            return;
+        }
         if (it.kind == HomeApps.ALL_APPS) {
             openSheet();
             return;
