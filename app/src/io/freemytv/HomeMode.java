@@ -228,6 +228,7 @@ final class HomeMode {
             s.put("mode", FREE).put("since", System.currentTimeMillis()).put("homeReverted", false)
                     .put("disabled", new JSONArray(sorted(disabled))).put("setupHome", setupHome);
             save(c, s);
+            LampaService.startIfWanted(c);
             if (RemoteKeys.supported()) {
                 try {
                     remoteService(c, adb, true);
@@ -279,6 +280,7 @@ final class HomeMode {
             s.put("mode", ORIGINAL).put("since", System.currentTimeMillis()).put("homeReverted", false)
                     .put("disabled", new JSONArray(failed));
             save(c, s);
+            LampaService.stop(c);   // Original leaves nothing of ours running
             if (failed.isEmpty() && homeOk) {
                 notice(c, Ui.tr("Modo original: Início, tela de descanso e apps de fábrica de volta.",
                         "Original mode: the factory home screen, screensaver and apps are back."));

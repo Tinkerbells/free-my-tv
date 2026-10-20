@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- After the TV boots (and after a TV update), checks that Free My TV mode is still as you left it. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Lampa lists: a small foreground service listens on 127.0.0.1 for what the Lampa plugin sends. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Sleep timer: exact alarms (Android 12 asks for the first; 13+ grants the second to this kind of app). -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
@@ -27,6 +29,7 @@
         <package android:name="com.peacocktv.peacockandroid" />
         <package android:name="com.globo.globotv" />
         <package android:name="com.spotify.tv.android" />
+        <package android:name="top.rootu.lampa" />
         <package android:name="com.tcl.tv" />
         <package android:name="com.google.android.tv" />
         <package android:name="com.mediatek.wwtv.tvcenter" />
@@ -140,6 +143,12 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/remote_key_service" />
         </service>
+
+        <!-- Receives the Lampa plugin's lists on 127.0.0.1 while Free My TV mode is on. Same process as the home screen. -->
+        <service
+            android:name=".LampaService"
+            android:process=":home"
+            android:exported="false" />
 
         <receiver
             android:name=".HomeReceiver"

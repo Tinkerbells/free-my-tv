@@ -384,6 +384,25 @@ final class HomeApps {
     }
 
     /**
+     * Opens a title from the user's Lampa lists in Lampa itself (it handles a new intent while running): same as
+     * `am start -n top.rootu.lampa/.MainActivity --es id <id> --es media <movie|tv> --es source tmdb`.
+     */
+    static boolean openLampa(Activity a, Recs.Pick p, View from, int x, int y, int w, int h) {
+        Intent intent = new Intent().setComponent(new ComponentName(LampaLists.PKG, LampaLists.PKG + ".MainActivity"))
+                .putExtra("id", String.valueOf(p.id))
+                .putExtra("media", p.kind)
+                .putExtra("source", p.source == null || p.source.isEmpty() ? "tmdb" : p.source)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            a.startActivity(intent, ActivityOptions.makeScaleUpAnimation(from, x, y, Math.max(w, 1), Math.max(h, 1)).toBundle());
+            return true;
+        } catch (ActivityNotFoundException | SecurityException e) {
+            AppLog.w("couldn't open Lampa: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Live TV: tune the antenna input directly. MediaTek TV Center otherwise restores the last source used, which can
      * be HDMI, so its explicit activity receives the tuner URI. Other TV apps keep the standard channel-list request.
      */

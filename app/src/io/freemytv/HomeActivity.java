@@ -1,6 +1,7 @@
 package io.freemytv;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -38,6 +39,8 @@ public class HomeActivity extends Activity {
         home = new HomeView(this);
         setContentView(home);
         getWindow().setBackgroundDrawable(null);
+        final Context app = getApplicationContext();
+        new Thread(() -> LampaService.startIfWanted(app), "lampa-start").start();   // reads the mode file: off the UI thread
     }
 
     @Override protected void onResume() {

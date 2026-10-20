@@ -45,6 +45,8 @@ final class Recs {
         String kind;            // "movie" or "tv"
         String title, backdrop, meta = "", app, pkg;
         boolean detailed;
+        boolean lampa;          // a title from the user's Lampa lists (LampaLists): opens in Lampa, not in a streaming app
+        String source;          // Lampa: where the id comes from ("tmdb")
     }
 
     interface Listener { void onRecs(); }
@@ -225,7 +227,9 @@ final class Recs {
     }
 
     private File imageFile(Pick p) {
-        return new File(new File(context.getCacheDir(), "recs"), p.backdrop.replace("/", ""));
+        // A Lampa image is a TMDB path or an https address (named by its hash); Lampa's own folder keeps the two sets apart.
+        String name = p.backdrop.startsWith("https://") ? Integer.toHexString(p.backdrop.hashCode()) + ".img" : p.backdrop.replace("/", "");
+        return new File(new File(context.getCacheDir(), p.lampa ? "lampa" : "recs"), name);
     }
 
     /** With a key: fetches the list if stale or the time of day (morning/afternoon/night) changed; then the details. */
@@ -576,7 +580,7 @@ final class Recs {
         //noinspection ResultOfMethodCallIgnored
         f.getParentFile().mkdirs();
         File part = new File(f.getPath() + ".part");
-        HttpURLConnection c = (HttpURLConnection) new URL(IMAGES + p.backdrop).openConnection();
+        HttpURLConnection c = (HttpURLConnection) new URL(p.backdrop.startsWith("https://") ? p.backdrop : IMAGES + p.backdrop).openConnection();
         c.setConnectTimeout(8000);
         c.setReadTimeout(20000);
         try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(part)) {
@@ -587,7 +591,7 @@ final class Recs {
             c.disconnect();
         }
         if (!part.renameTo(f)) throw new IOException("couldn't save the image");
-        prune(f.getParentFile());
+        prune(f.getParentFile(), p.lampa ? 40 : 24);
     }
 
     /** Reads the original (≥ 1920 wide) and builds the backdrop (Backdrop: cards plus frosted and glass versions). */
@@ -622,11 +626,11 @@ final class Recs {
         }
     }
 
-    private static void prune(File dir) {
+    private static void prune(File dir, int keep) {
         File[] files = dir.listFiles();
-        if (files == null || files.length <= 24) return;
+        if (files == null || files.length <= keep) return;
         Arrays.sort(files, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
-        for (int i = 0; i < files.length - 24; i++) {
+        for (int i = 0; i < files.length - keep; i++) {
             //noinspection ResultOfMethodCallIgnored
             files[i].delete();
         }
