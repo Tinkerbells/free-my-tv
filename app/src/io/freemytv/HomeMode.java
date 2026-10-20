@@ -63,6 +63,8 @@ final class HomeMode {
         "com.tcl.messagebox", "com.tcl.usercenter",                                   // TCL messages and account
         "com.tcl.exhibit", "com.tcl.esticker", "com.tcl.hotelmenu",                   // store demo, hotel menu
         "com.tcl.repairguide", "com.tcl.ocean.instructions", "com.tcl.logkit",        // repair guide, manual, logs
+        // Xiaomi PatchWall: Mi TV's own home screen, which the TV keeps launching, and its extras
+        "com.mitv.tvhome.atv", "com.mitv.tvhome.mitvplus", "com.mitv.tvhome.michannel",
     };
 
     /** The voice assistant, only with disable_assistant=true in config.properties (the mic button stops working). */
